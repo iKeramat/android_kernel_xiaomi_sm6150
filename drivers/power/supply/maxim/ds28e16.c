@@ -64,7 +64,7 @@ unsigned char session_seed[32] = {
 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA};
 unsigned char S_secret[32] = {
-#ifdef CONIFG_K6_CHARGE
+#if defined(CONFIG_K6_CHARGE) || defined(CONFIG_BATT_VERIFY_BY_DS28E16)
 0x0C, 0x99, 0x2B, 0xD3, 0x95, 0xDB, 0xA0, 0xB4,
 0xEF, 0x07, 0xB3, 0xD8, 0x75, 0xF3, 0xC7, 0xAE,
 0xDA, 0xC4, 0x41, 0x2F, 0x48, 0x93, 0xB5, 0xD9,
@@ -168,9 +168,24 @@ short Read_RomID(unsigned char *RomID)
 		else
 			flag_mi_romid = 1;
 #endif
+#ifdef CONFIG_BATT_VERIFY_BY_DS28E16
+		if (flag_mi_status == 0)
+			flag_mi_romid = 1;
+		else {
+			flag_mi_romid = 2;
+			memcpy(mi_romid, RomID, 8);
+			ds_dbg("getian--mi_romid = %02x,%02x,%02x,%02x,%02x,%02x,%02x,%02x\n",
+			mi_romid[0], mi_romid[1], mi_romid[2], mi_romid[3],
+			mi_romid[4], mi_romid[5], mi_romid[6], mi_romid[7]);
+			ds_log("getian---Read_RomID22\n");
+		}
+#endif
 		return DS_TRUE;
 	} else {
 		ow_reset();
+#ifdef CONFIG_BATT_VERIFY_BY_DS28E16
+		ds_log("getian---Read_RomID33\n");
+#endif
 		return DS_FALSE;
 	}
 }
@@ -304,8 +319,20 @@ int DS28E16_cmd_readStatus(unsigned char *data)
 	int len_byte = 1;
 	int read_len = 7;
 
+#ifdef CONFIG_BATT_VERIFY_BY_DS28E16
+	ds_dbg("getian--data = %02x,%02x,%02x,%02x,%02x,%02x,%02x,%02x\n",
+	data[0], data[1], data[2], data[3],
+	data[4], data[5], data[6], data[7]);
+	ds_dbg("getian--mi_status = %02x,%02x,%02x,%02x,%02x,%02x,%02x,%02x\n",
+	mi_status[0], mi_status[1], mi_status[2], mi_status[3],
+	mi_status[4], mi_status[5], mi_status[6], mi_status[7]);
+#endif
+
 	if (flag_mi_status) {
 		memcpy(data, mi_status, 8);
+#ifdef CONFIG_BATT_VERIFY_BY_DS28E16
+		ds_log("getian---DS28E16_cmd_readStatus00\n");
+#endif
 		return DS_TRUE;
 	}
 
@@ -334,13 +361,57 @@ int DS28E16_cmd_readStatus(unsigned char *data)
 			flag_mi_status = 1;
 			memcpy(mi_status, data, 8);
 			MANID[0] = data[4];
+#ifdef CONFIG_BATT_VERIFY_BY_DS28E16
+			ds_dbg("getian--data = %02x,%02x,%02x,%02x,%02x,%02x,%02x,%02x\n",
+			data[0], data[1], data[2], data[3],
+			data[4], data[5], data[6], data[7]);
+			ds_dbg("getian--mi_status = %02x,%02x,%02x,%02x,%02x,%02x,%02x,%02x\n",
+			mi_status[0], mi_status[1], mi_status[2], mi_status[3],
+			mi_status[4], mi_status[5], mi_status[6], mi_status[7]);
+			ds_log("getian---DS28E16_cmd_readStatus11\n");
+#endif
 			return DS_TRUE;
 		}
 	}
 
 	ow_reset();
+#ifdef CONFIG_BATT_VERIFY_BY_DS28E16
+	ds_log("getian---DS28E16_cmd_readStatus22\n");
+#endif
 	return DS_FALSE;
 }
+
+#ifdef CONFIG_BATT_VERIFY_BY_DS28E16
+void DS28E16_cmd_romid_pre(void)
+{
+	unsigned char write_buf[255];
+	int write_len = 0;
+	int len_byte = 1;
+	int i;
+
+	ow_reset();
+	write_byte(CMD_SKIP_ROM);
+
+	write_buf[write_len++] = CMD_START;
+	write_buf[write_len++] = len_byte;
+	write_buf[write_len++] = CMD_READ_STATUS;
+	for (i = 0; i < write_len; i++)
+		write_byte(write_buf[i]);
+
+	for (i = 0; i < 2; i++)
+		read_byte();
+
+	write_byte(CMD_RELEASE_BYTE);
+		Delay_us(1000*DELAY_DS28E16_EE_READ*tm);
+
+	//discard 11 bytes to get romid
+	for (i = 0; i < 11; i++)
+		read_byte();
+	ow_reset();
+
+	ds_log("DS28E16_cmd_romid_pre done\n");
+}
+#endif
 
 //--------------------------------------------------------------------------
 /// 'Read Memory' command
@@ -511,7 +582,7 @@ int DS28E16_cmd_writeMemory(int pg, unsigned char *data)
 				}
 				if (pagenum == 0x01) {
 					flag_mi_page1_data = 0;
-#ifdef CONFIG_K6_CHARGE
+#if defined(CONFIG_K6_CHARGE) || defined(CONFIG_BATT_VERIFY_BY_DS28E16)
 					memset(mi_page1_data, 0x00, 16);
 #else
 					memset(mi_page0_data, 0x00, 16);
@@ -701,6 +772,7 @@ unsigned char *challenge, unsigned char *hmac)
 	write_len += 32;
 
 	ds_info("computeReadPageAuthen:\n");
+#ifndef CONFIG_BATT_VERIFY_BY_DS28E16
 	ds_dbg("%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
 			write_buf[0], write_buf[1], write_buf[2], write_buf[3],
 			write_buf[4], write_buf[5], write_buf[6], write_buf[7],
@@ -711,6 +783,7 @@ unsigned char *challenge, unsigned char *hmac)
 			write_buf[24], write_buf[25], write_buf[26], write_buf[27],
 			write_buf[28], write_buf[29], write_buf[30], write_buf[31],
 			write_buf[32], write_buf[33], write_buf[34]);
+#endif
 
 	if (DS28E16_standard_cmd_flow(write_buf, DELAY_DS28E16_EE_WRITE, read_buf, &read_len, write_len)) {
 		last_result_byte = read_buf[0];
@@ -725,7 +798,9 @@ unsigned char *challenge, unsigned char *hmac)
 			read_buf[20], read_buf[21], read_buf[22], read_buf[23],
 			read_buf[24], read_buf[25], read_buf[26], read_buf[27],
 			read_buf[28], read_buf[29], read_buf[30], read_buf[31],read_buf[32]);
+#ifndef CONFIG_BATT_VERIFY_BY_DS28E16
 			memcpy(hmac, &read_buf[1], 32);
+#endif
 			ds_info("hmac:\n");
 			ds_dbg("%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
 			hmac[0], hmac[1], hmac[2], hmac[3],
@@ -829,7 +904,7 @@ unsigned char *Challenge, unsigned char *Secret_Seeds, unsigned char *S_Secret)
 			return ERROR_R_STATUS;
 		}
 
-#ifndef CONFIG_K6_CHARGE
+#if !defined(CONFIG_K6_CHARGE) || !defined(CONFIG_BATT_VERIFY_BY_DS28E16)
 		if (ds28el16_Read_RomID_retry(mi_romid) != DS_TRUE) {
 			ow_reset();
 			return ERROR_R_ROMID;
@@ -837,7 +912,7 @@ unsigned char *Challenge, unsigned char *Secret_Seeds, unsigned char *S_Secret)
 #endif
 	}
 
-#ifdef CONFIG_K6_CHARGE
+#if defined(CONFIG_K6_CHARGE) || defined(CONFIG_BATT_VERIFY_BY_DS28E16)
 	if (ds28el16_Read_RomID_retry(mi_romid) != DS_TRUE) {
 		ow_reset();
 		return ERROR_R_ROMID;
@@ -1011,12 +1086,29 @@ unsigned char *Challenge, unsigned char *Secret_Seeds, unsigned char *S_Secret)
 static int ds28el16_Read_RomID_retry(unsigned char *RomID)
 {
 	int i;
+#ifdef CONFIG_BATT_VERIFY_BY_DS28E16
+    static bool read_romid_ok = false;
+	ds_info("read rom id communication start ...\n");
+	if(read_romid_ok){
+			ds_log("ds28el16_Read_RomID_retry success ...\n");
+			return DS_TRUE;
+	}else{
+		for (i = 0; i < GET_ROM_ID_RETRY; i++) {
+			DS28E16_cmd_romid_pre();
+		}
+	}
+#else
 	unsigned char data[50];
 
 	for (i = 0; i < GET_ROM_ID_RETRY; i++) {
 		ds_info("read rom id communication start %d...\n", i);
 		if (DS28E16_cmd_readStatus(data) == DS_TRUE) {
+#endif
 			if (Read_RomID(RomID) == DS_TRUE) {
+#ifdef CONFIG_BATT_VERIFY_BY_DS28E16
+				ds_log("ds28el16_Read_RomID_retry success %d\n", i);
+				read_romid_ok = true;
+#endif
 				return DS_TRUE;
 			}
 		}
@@ -1059,7 +1151,7 @@ static int ds28el16_get_page_data_retry(int page, unsigned char *data)
 {
 	int i;
 
-#ifndef CONFIG_K6_CHARGE
+#if defined(CONFIG_K6_CHARGE) || defined(CONFIG_BATT_VERIFY_BY_DS28E16)
 	if (page >= MAX_PAGENUM)
 		return DS_FALSE;
 #endif
@@ -1077,6 +1169,7 @@ static int ds28el16_get_page_data_retry(int page, unsigned char *data)
 			data[12], data[13], data[14], data[15]);
 			ds_dbg("flag_mi_page0_data is %d\n", flag_mi_page0_data);
 			ds_dbg("mi_page0_data data:\n");
+#ifndef CONFIG_BATT_VERIFY_BY_DS28E16
 			ds_dbg("%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
 			mi_page0_data[0], mi_page0_data[1], mi_page0_data[2], mi_page0_data[3],
 			mi_page0_data[4], mi_page0_data[5], mi_page0_data[6], mi_page0_data[7],
@@ -1089,6 +1182,7 @@ static int ds28el16_get_page_data_retry(int page, unsigned char *data)
 			mi_page1_data[4], mi_page1_data[5], mi_page1_data[6], mi_page1_data[7],
 			mi_page1_data[8], mi_page1_data[9], mi_page1_data[10], mi_page1_data[11],
 			mi_page1_data[12], mi_page1_data[13], mi_page1_data[14], mi_page1_data[15]);
+#endif
 			ds_dbg("flag_mi_counter is %d\n", flag_mi_counter);
 			return DS_TRUE;
 		}
@@ -1927,7 +2021,7 @@ static int ds28e16_probe(struct platform_device *pdev)
 {
 	int retval = 0;
 	struct ds28e16_data *ds28e16_data;
-#ifndef CONFIG_K6_CHARGE
+#if defined(CONFIG_K6_CHARGE) || defined(CONFIG_BATT_VERIFY_BY_DS28E16)
 	union power_supply_propval b_val = {0,};
 #endif
 
@@ -1984,7 +2078,7 @@ static int ds28e16_probe(struct platform_device *pdev)
 		goto ds28e16_create_group_err;
 	}
 
-#ifndef CONFIG_K6_CHARGE
+#if defined(CONFIG_K6_CHARGE) || defined(CONFIG_BATT_VERIFY_BY_DS28E16)
 	retval = power_supply_get_property(ds28e16_data->verify_psy,
 					POWER_SUPPLY_PROP_AUTHEN_RESULT, &b_val);
 	if (b_val.intval != true) {
